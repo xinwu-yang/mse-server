@@ -12,6 +12,8 @@ import (
 	"time"
 	"runtime"
 	_ "net/http/pprof"
+	"strings"
+	"encoding/json"
 )
 
 var data = RWSyncStreamsMap{make(map[string]Stream), new(sync.RWMutex)}
@@ -227,11 +229,10 @@ func getMoof(boxType string, playIndex *int, isPlay *bool, i, total int, boxLeng
 	return true, nil
 }
 
-func startFFMpeg(id string, okChan *chan bool) {
+func startFFMpeg(id, cmd string, okChan *chan bool) {
+	splitCmd := strings.Split(cmd, " ")
 	//启动ffmpeg
-	//ffmpegCmd := exec.Command("ffmpeg", "-hide_banner", "-y", "-max_delay", "500000", "-i", "rtsp://192.168.254."+id+":554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif", "-c", "copy", "-f", "mp4", "-muxdelay", "0.5", "-movflags", "empty_moov+frag_keyframe+default_base_moof", "-")
-	ffmpegCmd := exec.Command("ffmpeg", "-hide_banner", "-y", "-f", "live_flv", "-i", "rtmp://p.cxria.com/live/"+id, "-c", "copy", "-start_at_zero", "-copytb", "1", "-avoid_negative_ts", "make_non_negative", "-f", "mp4", "-movflags", "empty_moov+frag_keyframe+default_base_moof", "-")
-	//ffmpegCmd := exec.Command("ffmpeg", "-hide_banner", "-y", "-i", "rtmp://p.cxria.com/vod/mp4:"+id+".f4v", "-c", "copy", "-f", "mp4", "-movflags", "empty_moov+frag_keyframe+default_base_moof", "-")
+	ffmpegCmd := exec.Command(splitCmd[0], splitCmd[1:]...)
 	ffmpegCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	ffmpegCmd.StdinPipe()
 	ffmpegOut, _ := ffmpegCmd.StdoutPipe()
@@ -325,17 +326,23 @@ func countReadAndWrite() {
 
 func handleWebSocketConn(ws *websocket.Conn) {
 	defer ws.Close()
+	var receiveData []byte
+	var receiveJson map[string]string
 	var id string
+	var cmd string
 	var playIndex int
 	var videoDecodeTimeOffset int64 = 0
 	var audioDecodeTimeOffset int64 = 0
 	okChan := make(chan bool, 1)
 	isPlay := false
 	websocket.Message.Send(ws, "conn successful")
-	err := websocket.Message.Receive(ws, &id)
+	err := websocket.Message.Receive(ws, &receiveData)
 	if err != nil {
 		return
 	}
+	json.Unmarshal(receiveData, &receiveJson)
+	id = receiveJson["id"]
+	cmd = receiveJson["cmd"]
 connFor:
 	for {
 		stream, ok := data.Get(id)
@@ -344,7 +351,7 @@ connFor:
 			okChan <- ok
 			stream := make(map[string]int)
 			live.Set(id, &stream)
-			go startFFMpeg(id, &okChan)
+			go startFFMpeg(id, cmd, &okChan)
 		} else if ok {
 			//释放通道中的数据
 			<-*stream.LockChan
